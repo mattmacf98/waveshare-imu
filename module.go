@@ -68,7 +68,11 @@ func NewWaveshare10DofImuV2(ctx context.Context, deps resource.Dependencies, nam
 	if addr == 0 {
 		addr = int(imu.dev.Addr)
 	}
-	logger.Infof("MPU9250 started on I2C bus %q at address 0x%02X", conf.I2CBus, addr)
+	chip := "MPU6050"
+	if imu.magnetometerSupported() {
+		chip = "MPU9250"
+	}
+	logger.Infof("%s started on I2C bus %q at address 0x%02X", chip, conf.I2CBus, addr)
 
 	return &waveshareImuWaveshare10DofImuV2{
 		name:   name,
@@ -115,7 +119,14 @@ func (s *waveshareImuWaveshare10DofImuV2) LinearAcceleration(ctx context.Context
 }
 
 func (s *waveshareImuWaveshare10DofImuV2) CompassHeading(ctx context.Context, extra map[string]interface{}) (float64, error) {
-	return 0, movementsensor.ErrMethodUnimplementedCompassHeading
+	if !s.imu.magnetometerSupported() {
+		return 0, movementsensor.ErrMethodUnimplementedCompassHeading
+	}
+	readings, err := s.imu.read()
+	if err != nil {
+		return 0, err
+	}
+	return readings.HeadingDeg, nil
 }
 
 func (s *waveshareImuWaveshare10DofImuV2) Orientation(ctx context.Context, extra map[string]interface{}) (spatialmath.Orientation, error) {
@@ -123,10 +134,14 @@ func (s *waveshareImuWaveshare10DofImuV2) Orientation(ctx context.Context, extra
 	if err != nil {
 		return nil, err
 	}
+	yaw := 0.0
+	if readings.HasMag {
+		yaw = readings.HeadingDeg * degToRad
+	}
 	return &spatialmath.EulerAngles{
 		Roll:  readings.RollDeg * degToRad,
 		Pitch: readings.PitchDeg * degToRad,
-		Yaw:   0,
+		Yaw:   yaw,
 	}, nil
 }
 
@@ -154,6 +169,14 @@ func (s *waveshareImuWaveshare10DofImuV2) Readings(ctx context.Context, extra ma
 		"y": imu.GyroDPS[1],
 		"z": imu.GyroDPS[2],
 	}
+	if imu.HasMag {
+		readings["mag_ut"] = map[string]float64{
+			"x": imu.MagUT[0],
+			"y": imu.MagUT[1],
+			"z": imu.MagUT[2],
+		}
+		readings["heading_deg"] = imu.HeadingDeg
+	}
 
 	return readings, nil
 }
@@ -167,6 +190,7 @@ func (s *waveshareImuWaveshare10DofImuV2) Properties(ctx context.Context, extra 
 		AngularVelocitySupported:    true,
 		LinearAccelerationSupported: true,
 		OrientationSupported:        true,
+		CompassHeadingSupported:     s.imu.magnetometerSupported(),
 	}, nil
 }
 
